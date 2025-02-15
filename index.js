@@ -7,12 +7,35 @@ const fileUpload = require('express-fileupload');
 const app = express();
 const port = 3000;
 
+
 // Middleware
+
+// app.use(cors({
+//     origin: [
+//         "https://visa-a7d0e.web.app", // production URL
+//         "http://localhost:3000"       // local development URL
+//     ],
+//     methods: "GET,POST,PUT,DELETE",
+//     credentials: true
+// }));
+
+
 app.use(cors());
 app.use(express.json());
 app.use(fileUpload());
 
-const uri = `mongodb+srv://${process.env.DB_USER}:${process.env.DB_PASS}@cluster0.rvwdp.mongodb.net/?retryWrites=true&w=majority&appName=Cluster0`;
+// const uri = `mongodb+srv://${process.env.DB_USER}:${process.env.DB_PASS}@cluster0.rvwdp.mongodb.net/?retryWrites=true&w=majority&appName=Cluster0`;
+
+ const uri = `mongodb+srv://${process.env.DB_USER}:${process.env.DB_PASS}@cluster0.rvwdp.mongodb.net/${process.env.DB_NAME}?retryWrites=true&w=majority&appName=Cluster0`;
+
+ //mongodb+srv://@cluster0.rvwdp.mongodb.net/?retryWrites=true&w=majority&appName=Cluster0
+
+
+// HardCoded
+
+//const uri = "mongodb+srv://online-embassy:wm5Yp1OG508rdzBg@cluster0.rvwdp.mongodb.net/online-embassy?retryWrites=true&w=majority&appName=Cluster0";
+
+
 
 // Create a MongoClient with a MongoClientOptions object to set the Stable API version
 const client = new MongoClient(uri, {
@@ -20,15 +43,70 @@ const client = new MongoClient(uri, {
         version: ServerApiVersion.v1,
         strict: true,
         deprecationErrors: true,
+        useNewUrlParser: true, 
+    useUnifiedTopology: true, 
+    maxPoolSize: 10 // Maintain up to 10 connections
     },
+    connectTimeoutMS: 10000, // 10 সেকেন্ড ওয়েট করবে
+    serverSelectionTimeoutMS: 5000 // ৫ সেকেন্ডের মধ্যে কানেকশন চেষ্টা করবে
 });
 
+  
+async function connectToDatabase() {
+    if (!client.topology || !client.topology.isConnected()) {
+        await client.connect();
+        console.log("Connected to MongoDB");
+    }
+    return client.db('online-embassy');
+}
+
+
+app.get('/api/products', async (req, res) => {
+    try {
+        const database = await connectToDatabase();
+        const productCollection = database.collection('my-products'); // Use your MongoDB collection name
+        const products = await productCollection.find({}).toArray();
+        res.json(products);
+    } catch (error) {
+        res.status(500).json({ error: 'Failed to fetch products from MongoDB' });
+    }
+});
+
+// MongoDB DELETE endpoint
+app.delete('/api/products/:serial', async (req, res) => {
+    const serial = parseInt(req.params.serial); // Get serial from URL params
+  
+    try {
+      // Connect to MongoDB and get the collection
+      const database = await connectToDatabase();
+      const productsCollection = database.collection('my-products');
+  
+      // Perform the deletion operation in MongoDB
+      const result = await productsCollection.deleteOne({ Serial: serial });
+  
+      if (result.deletedCount === 0) {
+        return res.status(404).send('Product not found');
+      }
+  
+      res.send(`Product with serial ${serial} successfully deleted`);
+    } catch (err) {
+      console.error('Error deleting product:', err);
+      res.status(500).send('Failed to delete product');
+    }
+  });
+
+  
+
+//let usersCollection;
+  
 async function bootstrap() {
     try {
         await client.connect();
         const database = client.db('online-embassy');
         const serviceCollection = database.collection('services');
+        const buyerOrdersCollection = database.collection('buyer-orders');
         const usersCollection = database.collection('Users');
+        const ordersCollection = database.collection("orders");
         const bookingCollection = database.collection('bookings');
         const appointmentOptionCollection = database.collection('appointmentOptions');
 
@@ -38,6 +116,109 @@ async function bootstrap() {
             const result = await serviceCollection.find(query).toArray();
             res.send(result);
         });
+
+        // Get all Buyer
+
+        app.get("/users/buyer/:email", async (req, res) => {
+            const email = req.params.email;
+        
+            try {
+                const user = await usersCollection.findOne({ email: email });
+        
+                if (!user) {
+                    return res.status(404).json({ message: "User not found", isBuyer: false });
+                }
+        
+                // ✅ `userType` ফিল্ড ব্যবহার করুন `role` এর পরিবর্তে
+                res.json({ isBuyer: user.userType === "buyer" });
+        
+            } catch (error) {
+                console.error(error);
+                res.status(500).json({ message: "Internal server error" });
+            }
+        });
+
+        //  অর্ডার লোড করার API
+        app.get("/orders/:email", async (req, res) => {
+            const email = req.params.email;
+            try {
+                const orders = await ordersCollection.find({ buyerEmail: email }).toArray();
+                res.json(orders);
+            } catch (error) {
+                console.error(error);
+                res.status(500).json({ message: "Internal Server Error" });
+            }
+        });
+
+
+
+        // Assuming you're using Express and MongoDB
+
+app.get("/buyer-orders", async (req, res) => {
+    try {
+      const buyerOrders = await buyerOrdersCollection.find().toArray(); // Fetch all orders from the collection
+      res.json(buyerOrders); // Send the data as JSON
+    } catch (error) {
+      console.error("Error fetching buyer orders:", error);
+      res.status(500).json({ message: "Internal Server Error" });
+    }
+  });
+  
+        // Backend route to check if the user is a seller
+        app.get("/users/seller/:email", async (req, res) => {
+            const email = req.params.email;
+            
+            try {
+              const user = await usersCollection.findOne({ email: email });
+        
+              console.log("User Data:", user); // ✅ Debugging
+        
+              if (!user) {
+                return res.status(404).json({ message: "User not found", isSeller: false });
+              }
+        
+              res.json({ isSeller: user.userType === "seller" });
+            } catch (error) {
+              console.error(error);
+              res.status(500).json({ message: "Internal server error" });
+            }
+        });
+        
+  
+        //Stripe Payment API
+        //const stripe = require("stripe")(process.env.STRIPE_SECRET_KEY);
+
+app.post("/create-payment-intent", async (req, res) => {
+    const { price } = req.body;
+
+    try {
+        const paymentIntent = await stripe.paymentIntents.create({
+            amount: price * 100, // Convert to cents
+            currency: "usd",
+            payment_method_types: ["card"],
+        });
+
+        res.json({ clientSecret: paymentIntent.client_secret });
+    } catch (error) {
+        res.status(500).json({ message: "Payment error", error });
+    }
+});
+
+//পেমেন্ট সফল হলে "Paid" স্ট্যাটাস
+app.put("/orders/pay/:id", async (req, res) => {
+    const orderId = req.params.id;
+    try {
+        const result = await ordersCollection.updateOne(
+            { _id: new ObjectId(orderId) },
+            { $set: { status: "Paid" } }
+        );
+
+        res.json({ message: "Payment Successful", updated: result.modifiedCount > 0 });
+    } catch (error) {
+        res.status(500).json({ message: "Failed to update payment status" });
+    }
+});
+
 
         // Add a new service
         app.post('/add-service', async (req, res) => {
@@ -109,7 +290,7 @@ async function bootstrap() {
 
         app.post('/users', async (req, res) => {
             const user = req.body;
-            const result = await usersCollection.insertOne(user);
+            const result = await usersCollection.insertOne(user); 
             res.send(result);
         });
 
